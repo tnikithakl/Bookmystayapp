@@ -1,163 +1,107 @@
+import java.io.*;
 import java.util.*;
 
-class UseCase11ConcurrentBooking {
+class UseCase12Persistence {
 
-    public static void main(String[] args) throws InterruptedException {
+    public static void main(String[] args) {
 
-        RoomInventory inventory = new RoomInventory();
-        BookingRequestQueue queue = new BookingRequestQueue();
-        BookingService service = new BookingService(inventory);
+        String file = "system_state.dat";
 
-        queue.addRequest(new Reservation("Lokesh", "Single"));
-        queue.addRequest(new Reservation("Rahul", "Single"));
-        queue.addRequest(new Reservation("Anita", "Single"));
-        queue.addRequest(new Reservation("Priya", "Single"));
+        PersistenceService persistence = new PersistenceService();
 
-        Runnable task = new BookingProcessor(queue, service);
+        SystemState state = persistence.load(file);
 
-        Thread t1 = new Thread(task, "T1");
-        Thread t2 = new Thread(task, "T2");
+        if (state == null) {
+            state = new SystemState();
+            state.inventory.set("Single", 2);
+            state.inventory.set("Double", 1);
 
-        t1.start();
-        t2.start();
+            state.history.add(new Reservation("S1", "Lokesh", "Single"));
+            state.history.add(new Reservation("D2", "Rahul", "Double"));
+        }
 
-        t1.join();
-        t2.join();
+        System.out.println("Current State:");
+        state.inventory.display();
+        state.history.display();
 
-        System.out.println("\nFinal Inventory:");
-        inventory.displayInventory();
+        persistence.save(state, file);
 
-        System.out.println("\nAllocations:");
-        service.displayAllocations();
+        System.out.println("\nState saved. Restart to verify recovery.");
     }
 }
 
-class Reservation {
-    private String guestName;
-    private String roomType;
-
-    public Reservation(String guestName, String roomType) {
-        this.guestName = guestName;
-        this.roomType = roomType;
-    }
-
-    public String getGuestName() { return guestName; }
-    public String getRoomType() { return roomType; }
+class SystemState implements Serializable {
+    RoomInventory inventory = new RoomInventory();
+    BookingHistory history = new BookingHistory();
 }
 
-class BookingRequestQueue {
+class Reservation implements Serializable {
+    private String id;
+    private String guest;
+    private String type;
 
-    private Queue<Reservation> queue = new LinkedList<>();
-
-    public synchronized void addRequest(Reservation r) {
-        queue.offer(r);
+    public Reservation(String id, String guest, String type) {
+        this.id = id;
+        this.guest = guest;
+        this.type = type;
     }
 
-    public synchronized Reservation poll() {
-        return queue.poll();
-    }
+    public String getType() { return type; }
 
-    public synchronized boolean isEmpty() {
-        return queue.isEmpty();
+    @Override
+    public String toString() {
+        return id + " | " + guest + " | " + type;
     }
 }
 
-class RoomInventory {
+class RoomInventory implements Serializable {
 
-    private Map<String, Integer> availability = new HashMap<>();
+    private Map<String, Integer> map = new HashMap<>();
 
-    public RoomInventory() {
-        availability.put("Single", 2);
+    public void set(String type, int count) {
+        map.put(type, count);
     }
 
-    public synchronized boolean isAvailable(String type) {
-        return availability.getOrDefault(type, 0) > 0;
-    }
-
-    public synchronized void decrement(String type) {
-        availability.put(type, availability.get(type) - 1);
-    }
-
-    public synchronized void displayInventory() {
-        for (Map.Entry<String, Integer> e : availability.entrySet()) {
+    public void display() {
+        System.out.println("Inventory:");
+        for (Map.Entry<String, Integer> e : map.entrySet()) {
             System.out.println(e.getKey() + " : " + e.getValue());
         }
     }
 }
 
-class BookingService {
+class BookingHistory implements Serializable {
 
-    private RoomInventory inventory;
-    private Set<String> allocated = new HashSet<>();
-    private Map<String, String> allocations = new HashMap<>();
-    private int counter = 1;
+    private List<Reservation> list = new ArrayList<>();
 
-    public BookingService(RoomInventory inventory) {
-        this.inventory = inventory;
+    public void add(Reservation r) {
+        list.add(r);
     }
 
-    public void process(Reservation r) {
-
-        synchronized (this) {
-
-            String type = r.getRoomType();
-
-            if (!inventory.isAvailable(type)) {
-                System.out.println(Thread.currentThread().getName() +
-                        " ❌ No room for " + r.getGuestName());
-                return;
-            }
-
-            String id = generateId(type);
-
-            allocated.add(id);
-            allocations.put(id, r.getGuestName());
-
-            inventory.decrement(type);
-
-            System.out.println(Thread.currentThread().getName() +
-                    " ✅ " + r.getGuestName() + " -> " + id);
-        }
-    }
-
-    private String generateId(String type) {
-        String id;
-        do {
-            id = type.substring(0, 1).toUpperCase() + counter++;
-        } while (allocated.contains(id));
-        return id;
-    }
-
-    public void displayAllocations() {
-        for (Map.Entry<String, String> e : allocations.entrySet()) {
-            System.out.println(e.getKey() + " -> " + e.getValue());
+    public void display() {
+        System.out.println("\nBooking History:");
+        for (Reservation r : list) {
+            System.out.println(r);
         }
     }
 }
 
-class BookingProcessor implements Runnable {
+class PersistenceService {
 
-    private BookingRequestQueue queue;
-    private BookingService service;
-
-    public BookingProcessor(BookingRequestQueue queue, BookingService service) {
-        this.queue = queue;
-        this.service = service;
+    public void save(SystemState state, String file) {
+        try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(file))) {
+            out.writeObject(state);
+        } catch (Exception e) {
+            System.out.println("Save failed: " + e.getMessage());
+        }
     }
 
-    @Override
-    public void run() {
-        while (true) {
-            Reservation r;
-
-            synchronized (queue) {
-                if (queue.isEmpty()) break;
-                r = queue.poll();
-            }
-
-            if (r != null) {
-                service.process(r);
-            }
+    public SystemState load(String file) {
+        try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(file))) {
+            return (SystemState) in.readObject();
+        } catch (Exception e) {
+            System.out.println("No valid saved state found. Starting fresh.");
+            return null;
         }
     }
 }
